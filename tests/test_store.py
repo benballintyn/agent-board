@@ -318,10 +318,12 @@ def test_seq_allocation_skips_existing_gap(two_agents):
 
 
 def test_append_numbered_retries_on_collision(board, mocker, tmp_path):
-    # Force the O_EXCL race branch: a slot exists that the seq scan doesn't see.
+    # Force the link-collision branch: pretend the dir is empty (n starts at 1)
+    # while slot 000001.json already exists, so the first os.link must retry.
     target = tmp_path / "seqdir"
     target.mkdir()
     (target / "000001.json").write_text("{}")
-    mocker.patch.object(store, "_seq_files", return_value=[])
+    mocker.patch.object(store, "_max_seq", return_value=0)
     seq = store._append_numbered(target, {"hello": "world"})
     assert seq == 2  # 1 collided, retried to 2
+    assert (target / "000002.json").exists()

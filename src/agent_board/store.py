@@ -96,8 +96,20 @@ def _seq_files(directory: Path) -> list[int]:
     return sorted(seqs)
 
 
+def _max_seq(directory: Path) -> int:
+    """Return the highest ``NNNNNN.json`` sequence number in a dir (0 if none)."""
+    return max((int(p.stem) for p in directory.glob("*.json") if p.stem.isdigit()), default=0)
+
+
 def _append_numbered(directory: Path, payload: dict[str, Any]) -> int:
     """Atomically write ``payload`` to the next free ``NNNNNN.json`` slot.
+
+    The payload is written to a private temp file in full, then hard-linked into
+    the next free numbered slot. ``os.link`` is atomic and exclusive -- it fails
+    if the slot already exists, so concurrent writers just retry the next number,
+    lock-free. Because a slot only ever appears as a link to an already-complete
+    file, a crash mid-write can never leave a partial ``NNNNNN.json`` for readers
+    to choke on (unlike a direct write into the slot).
 
     Args:
         directory: Target directory (created if missing).
@@ -107,18 +119,23 @@ def _append_numbered(directory: Path, payload: dict[str, Any]) -> int:
         The allocated sequence number.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    n = (max(_seq_files(directory), default=0)) + 1
-    while True:
-        path = directory / f"{n:0{_SEQ_WIDTH}d}.json"
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            n += 1
-            continue
-        payload["seq"] = n
-        with os.fdopen(fd, "w") as handle:
-            json.dump(payload, handle, indent=2)
-        return n
+    n = _max_seq(directory) + 1
+    tmp = directory / f".{secrets.token_hex(8)}.tmp"
+    try:
+        while True:
+            payload["seq"] = n
+            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                json.dump(payload, handle, indent=2)
+            slot = directory / f"{n:0{_SEQ_WIDTH}d}.json"
+            try:
+                os.link(tmp, slot)
+            except FileExistsError:
+                n += 1
+                continue
+            return n
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
