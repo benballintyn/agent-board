@@ -1,5 +1,6 @@
 """Tests for the CLI verb layer in :mod:`agent_board.cli`."""
 
+import json
 import os
 
 from agent_board import store
@@ -142,3 +143,100 @@ def test_check_messages_renders_channel_without_topic(two_agents, capsys):
     run(capsys, "post", "--id", "alice", channel, "--text", "no-topic msg")
     code, out, _ = run(capsys, "check-messages", "--id", "bob")
     assert code == 0 and f"[channel {channel}]" in out and "no-topic msg" in out
+
+
+# --- create/post --json --------------------------------------------------- #
+def test_create_json(two_agents, capsys):
+    code, out, _ = run(capsys, "create", "--id", "alice", "--to", "bob", "--topic", "t", "--json")
+    data = json.loads(out)
+    assert code == 0 and data["members"] == ["alice", "bob"] and data["topic"] == "t"
+
+
+def test_post_json(two_agents, capsys):
+    run(capsys, "create", "--id", "alice", "--to", "bob")
+    channel = store.member_channels("alice")[0].id
+    code, out, _ = run(capsys, "post", "--id", "alice", channel, "--text", "hi", "--json")
+    data = json.loads(out)
+    assert code == 0 and data["channel"] == channel and data["type"] == "message"
+
+
+# --- get-artifact --------------------------------------------------------- #
+def _make_artifact(capsys, src):
+    """Open a channel, post ``src`` as an artifact, return (channel, artifact_id)."""
+    run(capsys, "create", "--id", "alice", "--to", "bob")
+    channel = store.member_channels("alice")[0].id
+    _, out, _ = run(capsys, "post", "--id", "alice", channel, "--artifact", str(src), "--json")
+    return channel, json.loads(out)["artifact"]["id"]
+
+
+def test_get_artifact_with_out_file(two_agents, capsys, tmp_path):
+    src = tmp_path / "src.txt"
+    src.write_text("bytes!")
+    channel, aid = _make_artifact(capsys, src)
+    dest = tmp_path / "fetched.txt"
+    code, out, _ = run(capsys, "get-artifact", channel, aid, "--out", str(dest))
+    assert code == 0 and dest.read_text() == "bytes!" and "saved artifact" in out
+
+
+def test_get_artifact_default_cwd(two_agents, capsys, tmp_path, mocker):
+    src = tmp_path / "src" / "data.bin"
+    src.parent.mkdir()
+    src.write_text("xy")
+    channel, aid = _make_artifact(capsys, src)
+    mocker.patch("agent_board.cli.Path.cwd", return_value=tmp_path)
+    code, _, _ = run(capsys, "get-artifact", channel, aid)
+    assert code == 0 and (tmp_path / "data.bin").read_text() == "xy"
+
+
+def test_get_artifact_out_is_directory(two_agents, capsys, tmp_path):
+    src = tmp_path / "report.csv"
+    src.write_text("a,b")
+    channel, aid = _make_artifact(capsys, src)
+    outdir = tmp_path / "downloads"
+    outdir.mkdir()
+    code, _, _ = run(capsys, "get-artifact", channel, aid, "--out", str(outdir))
+    assert code == 0 and (outdir / "report.csv").read_text() == "a,b"
+
+
+def test_get_artifact_missing_errors(two_agents, capsys):
+    run(capsys, "create", "--id", "alice", "--to", "bob")
+    channel = store.member_channels("alice")[0].id
+    code, _, err = run(capsys, "get-artifact", channel, "nope_x.txt")
+    assert code == 1 and "not found" in err
+
+
+# --- list-channels -------------------------------------------------------- #
+def test_list_channels_empty(two_agents, capsys):
+    code, out, _ = run(capsys, "list-channels", "--id", "alice")
+    assert code == 0 and "no channels" in out
+
+
+def test_list_channels_populated(two_agents, capsys):
+    run(capsys, "create", "--id", "alice", "--to", "bob", "--topic", "sync")
+    channel = store.member_channels("alice")[0].id
+    store.post(channel, "alice", text="hi")
+    code, out, _ = run(capsys, "list-channels", "--id", "bob")
+    # "channel opened" system event + the "hi" message, both from alice.
+    assert code == 0 and channel in out and "sync" in out and "unread: 2" in out
+
+
+def test_list_channels_json(two_agents, capsys):
+    run(capsys, "create", "--id", "alice", "--to", "bob")
+    code, out, _ = run(capsys, "list-channels", "--id", "alice", "--json")
+    assert code == 0 and '"unread"' in out
+
+
+# --- whoami --------------------------------------------------------------- #
+def test_whoami_registered(two_agents, capsys):
+    code, out, _ = run(capsys, "whoami", "--id", "alice")
+    assert code == 0 and "alice" in out and "frontend" in out
+
+
+def test_whoami_unregistered(board, capsys):
+    code, out, _ = run(capsys, "whoami", "--id", "ghost")
+    assert code == 0 and "not registered" in out
+
+
+def test_whoami_json(two_agents, capsys):
+    code, out, _ = run(capsys, "whoami", "--id", "bob", "--json")
+    assert code == 0 and '"id": "bob"' in out

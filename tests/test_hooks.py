@@ -30,6 +30,17 @@ def test_session_start_empty_payload_is_noop(board, capsys, mocker):
     assert store.list_agents() == []
 
 
+def test_session_start_disambiguates_duplicate_name(board, mocker):
+    # Two sessions in the same directory: first claims the basename, the
+    # second is disambiguated with a short id suffix.
+    feed(mocker, {"session_id": "sess-aaaa", "cwd": "/x/proj"})
+    main(["hook-session-start"])
+    feed(mocker, {"session_id": "sess-bbbb", "cwd": "/x/proj"})
+    main(["hook-session-start"])
+    names = sorted(a.name for a in store.list_agents())
+    assert names == ["proj", "proj-sess"]
+
+
 def test_session_start_without_env_file(board, mocker):
     mocker.patch.dict("os.environ", {}, clear=False)
     import os

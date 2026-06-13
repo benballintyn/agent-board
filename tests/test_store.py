@@ -183,6 +183,57 @@ def test_vote_close_nonmember_raises(two_agents):
         store.vote_close(channel.id, "carol")
 
 
+def test_propose_close_notifies_peer(two_agents):
+    channel = store.create_channel("alice", "bob")
+    store.vote_close(channel.id, "alice")
+    # Bob learns about the proposal via his normal check-messages delta.
+    result = store.check_messages("bob")
+    texts = [e["text"] for e in result["channels"][channel.id]["events"]]
+    assert any("proposed closing" in t for t in texts)
+
+
+def test_propose_close_does_not_double_notify(two_agents):
+    channel = store.create_channel("alice", "bob")
+    store.vote_close(channel.id, "alice")
+    store.vote_close(channel.id, "alice")  # repeat vote
+    events, _ = store.read_events(channel.id)
+    proposals = [e for e in events if "proposed closing" in (e.text or "")]
+    assert len(proposals) == 1
+
+
+# --- channel overviews / unique names ------------------------------------- #
+def test_channel_overviews_counts_unread_from_others(two_agents):
+    channel = store.create_channel("alice", "bob")
+    store.post(channel.id, "alice", text="one")
+    store.post(channel.id, "alice", text="two")
+    [overview] = store.channel_overviews("bob")
+    assert overview["channel"].id == channel.id
+    # "channel opened" system event + two messages, all authored by alice.
+    assert overview["unread"] == 3
+    # Alice's own posts are not unread for her (only the system "opened" event).
+    alice_overview = store.channel_overviews("alice")[0]
+    assert alice_overview["unread"] == 0
+
+
+def test_channel_overviews_empty(board):
+    store.register_agent("lonely", name="lonely")
+    assert store.channel_overviews("lonely") == []
+
+
+def test_unique_agent_name_free(two_agents):
+    assert store.unique_agent_name("brand-new", "alice") == "brand-new"
+
+
+def test_unique_agent_name_self_is_not_collision(two_agents):
+    # "alice" is taken by agent id "alice" -- re-registering self keeps it.
+    assert store.unique_agent_name("alice", "alice") == "alice"
+
+
+def test_unique_agent_name_collision_gets_suffix(two_agents):
+    # A different agent wants the name "alice" -> disambiguated.
+    assert store.unique_agent_name("alice", "zz99") == "alice-zz99"
+
+
 # --- gc ------------------------------------------------------------------- #
 def test_gc_reaps_idle_channel(two_agents):
     channel = store.create_channel("alice", "bob")

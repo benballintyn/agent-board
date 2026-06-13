@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+from pathlib import Path
 from typing import Any, TextIO
 
 from . import config, store
@@ -133,6 +135,9 @@ def cmd_create(args: argparse.Namespace, out: TextIO) -> int:
     """Open a channel with another agent and invite them."""
     creator = _require_agent_id(args)
     channel = store.create_channel(creator, args.to, topic=args.topic or "")
+    if args.json:
+        _emit_json({"channel": channel.id, "topic": channel.topic, "members": channel.members}, out)
+        return 0
     out.write(
         f"opened channel {channel.id} with {args.to} (topic: {channel.topic or '(none)'}). "
         f"They have been invited.\n"
@@ -166,7 +171,76 @@ def cmd_post(args: argparse.Namespace, out: TextIO) -> int:
     """Post a message and/or share an artifact."""
     agent_id = _require_agent_id(args)
     event = store.post(args.channel, agent_id, text=args.text, artifact_path=args.artifact)
+    if args.json:
+        _emit_json(
+            {
+                "seq": event.seq,
+                "channel": args.channel,
+                "type": event.type,
+                "artifact": event.artifact,
+            },
+            out,
+        )
+        return 0
     out.write(f"posted #{event.seq} to {args.channel}\n")
+    return 0
+
+
+def cmd_get_artifact(args: argparse.Namespace, out: TextIO) -> int:
+    """Download a shared artifact to a local path."""
+    src = store.artifact_path(args.channel, args.artifact_id)
+    name = args.artifact_id.split("_", 1)[-1]
+    dest = Path(args.out) if args.out else Path.cwd() / name
+    if dest.is_dir():
+        dest = dest / name
+    shutil.copyfile(src, dest)
+    out.write(f"saved artifact to {dest}\n")
+    return 0
+
+
+def cmd_list_channels(args: argparse.Namespace, out: TextIO) -> int:
+    """List the open channels this agent belongs to."""
+    agent_id = _require_agent_id(args)
+    overviews = store.channel_overviews(agent_id)
+    if args.json:
+        _emit_json(
+            [
+                {
+                    "id": o["channel"].id,
+                    "topic": o["channel"].topic,
+                    "members": o["channel"].members,
+                    "status": o["channel"].status,
+                    "unread": o["unread"],
+                }
+                for o in overviews
+            ],
+            out,
+        )
+        return 0
+    if not overviews:
+        out.write("no channels\n")
+        return 0
+    for o in overviews:
+        channel = o["channel"]
+        others = ", ".join(m for m in channel.members if m != agent_id) or "(none)"
+        topic = channel.topic or "(no topic)"
+        out.write(
+            f"{channel.id} [{channel.status}] with {others} - {topic} (unread: {o['unread']})\n"
+        )
+    return 0
+
+
+def cmd_whoami(args: argparse.Namespace, out: TextIO) -> int:
+    """Show this agent's own registration."""
+    agent_id = _require_agent_id(args)
+    agent = store.get_agent(agent_id)
+    if agent is None:
+        out.write(f"not registered (id={agent_id}); run `agent-board register`\n")
+        return 0
+    if args.json:
+        _emit_json(agent.to_dict(), out)
+        return 0
+    out.write(f"{agent.name} (id={agent.id}) [{agent.status}] - {agent.blurb or '(no blurb)'}\n")
     return 0
 
 
@@ -218,8 +292,9 @@ def cmd_hook_session_start(args: argparse.Namespace, out: TextIO) -> int:
     if not session_id:
         return 0
     cwd = payload.get("cwd", "")
-    name = os.path.basename(cwd.rstrip("/")) if cwd else session_id
-    store.register_agent(session_id, name=name or session_id, cwd=cwd)
+    base = os.path.basename(cwd.rstrip("/")) if cwd else session_id
+    name = store.unique_agent_name(base or session_id, session_id)
+    store.register_agent(session_id, name=name, cwd=cwd)
 
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if env_file:
@@ -301,10 +376,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.set_defaults(func=cmd_list_agents)
 
+    p = sub.add_parser("whoami", help="show your own registration")
+    add_id(p)
+    p.add_argument("--json", action="store_true", help="emit JSON")
+    p.set_defaults(func=cmd_whoami)
+
     p = sub.add_parser("create", help="open a channel with another agent")
     add_id(p)
     p.add_argument("--to", required=True, help="target agent id or name")
     p.add_argument("--topic", help="channel subject")
+    p.add_argument("--json", action="store_true", help="emit JSON")
     p.set_defaults(func=cmd_create)
 
     p = sub.add_parser("check-messages", help="show new invites and messages")
@@ -312,6 +393,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.add_argument("--no-advance", action="store_true", help="do not advance cursors")
     p.set_defaults(func=cmd_check_messages)
+
+    p = sub.add_parser("list-channels", help="list channels you belong to")
+    add_id(p)
+    p.add_argument("--json", action="store_true", help="emit JSON")
+    p.set_defaults(func=cmd_list_channels)
 
     p = sub.add_parser("accept", help="join a channel you were invited to")
     add_id(p)
@@ -323,7 +409,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("channel", help="channel id")
     p.add_argument("--text", help="message body")
     p.add_argument("--artifact", help="path to a file to share")
+    p.add_argument("--json", action="store_true", help="emit JSON")
     p.set_defaults(func=cmd_post)
+
+    p = sub.add_parser("get-artifact", help="download a shared artifact to a local path")
+    p.add_argument("channel", help="channel id")
+    p.add_argument("artifact_id", help="artifact id (from a read/check-messages event)")
+    p.add_argument("--out", help="destination path or directory (default: ./<name>)")
+    p.set_defaults(func=cmd_get_artifact)
 
     p = sub.add_parser("read", help="read a channel's events")
     p.add_argument("channel", help="channel id")

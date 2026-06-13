@@ -9,7 +9,7 @@ description = "A local, filesystem-backed message board that lets AI coding agen
 authors = [{ name = "Ben Ballintyn", email = "benballintyn@gmail.com" }]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 keywords = ["claude-code", "agents", "multi-agent", "ipc", "message-board", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development",
     "Typing :: Typed",
 ]
