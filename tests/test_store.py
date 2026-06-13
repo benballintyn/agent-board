@@ -125,6 +125,23 @@ def test_artifact_path_missing_raises(two_agents):
         store.artifact_path(channel.id, "ghost")
 
 
+# --- path-traversal / id hardening ---------------------------------------- #
+def test_artifact_path_rejects_traversal(two_agents):
+    channel = store.create_channel("alice", "bob")
+    with pytest.raises(BoardError):
+        store.artifact_path(channel.id, "../../../../etc/passwd")
+
+
+def test_channel_id_traversal_rejected(board):
+    with pytest.raises(BoardError):
+        store.read_events("../../../../etc")
+
+
+def test_register_rejects_unsafe_id(board):
+    with pytest.raises(BoardError):
+        store.register_agent("../evil", name="x")
+
+
 def test_accept_posts_joined_event(two_agents):
     channel = store.create_channel("alice", "bob")
     store.accept_channel(channel.id, "bob")
@@ -274,6 +291,21 @@ def test_gc_skips_unparseable_last_seen(board):
     path.write_text(json.dumps(raw))
     summary = store.gc()  # must not raise
     assert "weird" not in summary["offline_agents"]
+
+
+def test_gc_prunes_long_offline_agent(board):
+    import json
+
+    store.register_agent("ancient", name="ancient")
+    store.set_status("ancient", "offline")
+    path = config.agents_dir() / "ancient.json"
+    raw = json.loads(path.read_text())
+    raw["last_seen"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(raw))
+    summary = store.gc()
+    assert "ancient" in summary["pruned_agents"]
+    assert store.get_agent("ancient") is None
+    assert not (config.agents_dir() / "ancient").exists()
 
 
 def test_seq_allocation_skips_existing_gap(two_agents):

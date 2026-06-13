@@ -205,6 +205,18 @@ def test_get_artifact_missing_errors(two_agents, capsys):
     assert code == 1 and "not found" in err
 
 
+def test_get_artifact_rejects_traversal(two_agents, capsys):
+    run(capsys, "create", "--id", "alice", "--to", "bob")
+    channel = store.member_channels("alice")[0].id
+    code, _, err = run(capsys, "get-artifact", channel, "../../../../etc/passwd")
+    assert code == 1 and "invalid artifact id" in err
+
+
+def test_command_rejects_unsafe_agent_id(board, capsys):
+    code, _, err = run(capsys, "whoami", "--id", "../evil")
+    assert code == 1 and "invalid agent id" in err
+
+
 # --- list-channels -------------------------------------------------------- #
 def test_list_channels_empty(two_agents, capsys):
     code, out, _ = run(capsys, "list-channels", "--id", "alice")

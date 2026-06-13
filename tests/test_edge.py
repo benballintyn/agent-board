@@ -52,7 +52,7 @@ def test_register_idempotent_without_cwd_preserves_cwd(board):
 
 def test_gc_no_channels_directory(fresh_home):
     summary = store.gc()
-    assert summary == {"reaped_channels": [], "offline_agents": []}
+    assert summary == {"reaped_channels": [], "offline_agents": [], "pruned_agents": []}
 
 
 def test_gc_skips_entries_without_meta(two_agents):

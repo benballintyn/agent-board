@@ -44,6 +44,30 @@ class BoardError(Exception):
     """Raised for expected, user-facing failures (unknown channel, etc.)."""
 
 
+def _check_segment(value: str, kind: str) -> str:
+    """Validate that a caller-supplied id is safe as a single path segment.
+
+    Ids are used directly as directory/file names; this rejects anything that
+    could escape its parent (a defence-in-depth traversal guard). Ids the board
+    generates -- ``secrets.token_hex`` channel ids, ``hex_name`` artifact ids,
+    session ids -- always pass.
+
+    Args:
+        value: The id to validate.
+        kind: Human label used in the error message ("channel", "artifact", ...).
+
+    Returns:
+        ``value`` unchanged when safe.
+
+    Raises:
+        BoardError: If the id is empty or contains a path separator, ``..``, or
+            a NUL byte.
+    """
+    if not value or value in (".", "..") or "/" in value or "\\" in value or "\x00" in value:
+        raise BoardError(f"invalid {kind} id: {value!r}")
+    return value
+
+
 # --------------------------------------------------------------------------- #
 # Low-level helpers
 # --------------------------------------------------------------------------- #
@@ -124,7 +148,11 @@ def register_agent(
 
     Returns:
         The persisted :class:`~agent_board.models.Agent`.
+
+    Raises:
+        BoardError: If ``agent_id`` is not a safe path segment.
     """
+    _check_segment(agent_id, "agent")
     config.ensure_layout()
     path = _agent_path(agent_id)
     now = _utc_now()
@@ -255,7 +283,7 @@ def deliver(agent_id: str, item: dict[str, Any]) -> int:
 # Channels
 # --------------------------------------------------------------------------- #
 def _channel_dir(channel_id: str) -> Path:
-    return config.channels_dir() / channel_id
+    return config.channels_dir() / _check_segment(channel_id, "channel")
 
 
 def _meta_path(channel_id: str) -> Path:
@@ -416,7 +444,7 @@ def artifact_path(channel_id: str, artifact_id: str) -> Path:
     Raises:
         BoardError: If the artifact does not exist in the channel.
     """
-    path = _channel_dir(channel_id) / "artifacts" / artifact_id
+    path = _channel_dir(channel_id) / "artifacts" / _check_segment(artifact_id, "artifact")
     if not path.exists():
         raise BoardError(f"artifact '{artifact_id}' not found in channel '{channel_id}'")
     return path
@@ -594,7 +622,10 @@ def gc(ttl: int | None = None, now: float | None = None) -> dict[str, list[str]]
         now: Override for the current epoch time (used in tests).
 
     Returns:
-        A mapping ``{"reaped_channels": [...], "offline_agents": [...]}``.
+        A mapping ``{"reaped_channels": [...], "offline_agents": [...],
+        "pruned_agents": [...]}``. Agents idle past
+        :data:`config.DEFAULT_AGENT_PRUNE_SECONDS` have their record and home
+        directory deleted (a fresh registration recreates them).
     """
     ttl = config.ttl_seconds() if ttl is None else ttl
     now = time.time() if now is None else now
@@ -621,4 +652,16 @@ def gc(ttl: int | None = None, now: float | None = None) -> dict[str, list[str]]
                 set_status(agent.id, "offline")
                 offline.append(agent.id)
 
-    return {"reaped_channels": reaped, "offline_agents": offline}
+    pruned: list[str] = []
+    for agent in list_agents():
+        try:
+            seen = datetime.fromisoformat(agent.last_seen).timestamp()
+        except ValueError:
+            continue  # empty/garbage timestamp -- leave it alone
+        if now - seen > config.DEFAULT_AGENT_PRUNE_SECONDS:
+            _agent_path(agent.id).unlink(missing_ok=True)
+            shutil.rmtree(_agent_home(agent.id), ignore_errors=True)
+            pruned.append(agent.id)
+            logger.debug("gc pruned long-offline agent {}", agent.id)
+
+    return {"reaped_channels": reaped, "offline_agents": offline, "pruned_agents": pruned}

@@ -41,7 +41,7 @@ def _require_agent_id(args: argparse.Namespace) -> str:
             "no agent id available: pass --id or set AGENT_BOARD_ID "
             "(the SessionStart hook normally does this for you)"
         )
-    return agent_id
+    return store._check_segment(agent_id, "agent")
 
 
 def _format_event(event: dict[str, Any]) -> str:
@@ -272,7 +272,8 @@ def cmd_gc(args: argparse.Namespace, out: TextIO) -> int:
     summary = store.gc(ttl=args.ttl)
     out.write(
         f"gc: reaped {len(summary['reaped_channels'])} channel(s), "
-        f"marked {len(summary['offline_agents'])} agent(s) offline\n"
+        f"marked {len(summary['offline_agents'])} agent(s) offline, "
+        f"pruned {len(summary['pruned_agents'])} agent(s)\n"
     )
     return 0
 

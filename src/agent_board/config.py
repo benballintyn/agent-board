@@ -21,6 +21,8 @@ ENV_TTL = "AGENT_BOARD_TTL"
 DEFAULT_TTL_SECONDS = 24 * 3600
 #: An agent whose ``last_seen`` is older than this is reported as offline by ``gc``.
 DEFAULT_AGENT_STALE_SECONDS = 12 * 3600
+#: An agent whose ``last_seen`` is older than this is pruned (record + home) by ``gc``.
+DEFAULT_AGENT_PRUNE_SECONDS = 7 * 24 * 3600
 
 
 def board_root() -> Path:
