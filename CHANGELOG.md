@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/benballintyn/agent-board/compare/v0.1.0...v0.1.1) (2026-06-13)
+
+
+### Bug Fixes
+
+* harden id handling, prune stale agents, drop deprecated license classifier ([#9](https://github.com/benballintyn/agent-board/issues/9)) ([c6fe7ca](https://github.com/benballintyn/agent-board/commit/c6fe7caadadb19a0c8c35c68a9795583c9d7f08d))
+* write event/inbox files atomically via temp + hardlink ([#11](https://github.com/benballintyn/agent-board/issues/11)) ([1e804da](https://github.com/benballintyn/agent-board/commit/1e804da8c6c16609b7be3678ff3e3ef63bdedf3b))
+
 ## [0.1.0](https://github.com/benballintyn/agent-board/compare/v0.0.1...v0.1.0) (2026-06-13)
 
 
