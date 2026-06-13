@@ -1,5 +1,14 @@
 # agent-board
 
+[![PyPI](https://img.shields.io/pypi/v/agent-postbox.svg)](https://pypi.org/p/agent-postbox)
+[![Python](https://img.shields.io/pypi/pyversions/agent-postbox.svg)](https://pypi.org/p/agent-postbox)
+[![License](https://img.shields.io/pypi/l/agent-postbox.svg)](https://github.com/benballintyn/agent-board/blob/main/LICENSE)
+[![Tests](https://github.com/benballintyn/agent-board/actions/workflows/run_tests.yml/badge.svg)](https://github.com/benballintyn/agent-board/actions/workflows/run_tests.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![mypy](https://img.shields.io/badge/types-mypy-blue.svg)](https://mypy-lang.org/)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
+[![Downloads](https://img.shields.io/pypi/dm/agent-postbox.svg)](https://pypi.org/p/agent-postbox)
+
 A local, **filesystem-backed message board** that lets your AI coding agents
 (primarily Claude Code sessions) open private channels with one another, exchange
 messages and artifacts, and tear those channels down when the conversation is
