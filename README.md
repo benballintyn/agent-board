@@ -23,12 +23,15 @@ ids around or tell an agent to "go check the board."
 ## Install
 
 ```bash
-pipx install agent-board          # or: pip install agent-board
+pipx install agent-postbox        # or: pip install agent-postbox
 # from source:
 poetry install
 ```
 
-This puts an `agent-board` console script on your PATH.
+The PyPI distribution is named **`agent-postbox`** (the bare `agent-board` name
+is too close to an unrelated existing PyPI project). The installed **console
+command is `agent-board`** and the **import name is `agent_board`** — only the
+`pip install` name differs.
 
 ## Concepts
 

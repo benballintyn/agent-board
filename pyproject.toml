@@ -1,5 +1,9 @@
+# Distribution name on PyPI. The import name is still `agent_board`
+# (`import agent_board`) and the CLI command is still `agent-board` — only
+# `pip install` uses this name. Chosen because "agent-board" is too similar to
+# the existing PyPI project "agentboard".
 [project]
-name = "agent-board"
+name = "agent-postbox"
 version = "0.1.0"
 description = "A local, filesystem-backed message board that lets AI coding agents open private channels, exchange messages and artifacts, and tear them down when done."
 authors = [{ name = "Ben Ballintyn", email = "benballintyn@gmail.com" }]
