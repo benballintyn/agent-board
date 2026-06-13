@@ -1,0 +1,563 @@
+"""Filesystem operations that make up the board.
+
+The board is just a directory tree -- there is no daemon. Concurrency safety
+comes from a single rule: **every writer creates its own distinct file**, so
+there is never append contention. The only shared counter (a channel's or
+inbox's sequence number) is allocated with an ``O_EXCL`` create-and-retry loop,
+which is atomic on a local filesystem.
+
+Layout::
+
+    <root>/
+      agents/
+        <agent-id>.json            # Agent record
+        <agent-id>/
+          inbox/<seq>.json         # invites + notifications addressed to me
+          cursors.json             # {channel-id|"inbox": last_seen_seq}
+      channels/
+        <channel-id>/
+          meta.json                # Channel record
+          messages/<seq>.json      # one Event per file; seq == zero-padded name
+          artifacts/<artifact-id>  # raw bytes of shared files
+          close/<agent-id>         # presence of file == this member voted to close
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import shutil
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from . import config
+from .log import logger
+from .models import Agent, Channel, Event
+
+_SEQ_WIDTH = 6
+
+
+class BoardError(Exception):
+    """Raised for expected, user-facing failures (unknown channel, etc.)."""
+
+
+# --------------------------------------------------------------------------- #
+# Low-level helpers
+# --------------------------------------------------------------------------- #
+def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string at second precision."""
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    """Load and parse a JSON object from ``path``."""
+    return json.loads(path.read_text())
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    """Write ``data`` as pretty JSON to ``path`` via a temp file + rename."""
+    tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, path)
+
+
+def _seq_files(directory: Path) -> list[int]:
+    """Return the sorted sequence numbers of ``NNNNNN.json`` files in a dir."""
+    if not directory.exists():
+        return []
+    seqs = [int(p.stem) for p in directory.glob("*.json") if p.stem.isdigit()]
+    return sorted(seqs)
+
+
+def _append_numbered(directory: Path, payload: dict[str, Any]) -> int:
+    """Atomically write ``payload`` to the next free ``NNNNNN.json`` slot.
+
+    Args:
+        directory: Target directory (created if missing).
+        payload: JSON object to store; its ``seq`` key is set to the slot number.
+
+    Returns:
+        The allocated sequence number.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    n = (max(_seq_files(directory), default=0)) + 1
+    while True:
+        path = directory / f"{n:0{_SEQ_WIDTH}d}.json"
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            n += 1
+            continue
+        payload["seq"] = n
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle, indent=2)
+        return n
+
+
+# --------------------------------------------------------------------------- #
+# Agents / directory
+# --------------------------------------------------------------------------- #
+def _agent_path(agent_id: str) -> Path:
+    return config.agents_dir() / f"{agent_id}.json"
+
+
+def _agent_home(agent_id: str) -> Path:
+    return config.agents_dir() / agent_id
+
+
+def register_agent(
+    agent_id: str, name: str | None = None, blurb: str | None = None, cwd: str = ""
+) -> Agent:
+    """Create or refresh an agent's record and personal directory.
+
+    Re-registering an existing agent updates ``last_seen`` and ``status`` and
+    overwrites ``name``/``cwd``/``blurb`` only when a new value is supplied.
+
+    Args:
+        agent_id: Stable unique id for the agent.
+        name: Human-friendly handle; defaults to ``agent_id`` on first registration.
+        blurb: Optional self-description; preserved if ``None``.
+        cwd: Working directory the agent registered from.
+
+    Returns:
+        The persisted :class:`~agent_board.models.Agent`.
+    """
+    config.ensure_layout()
+    path = _agent_path(agent_id)
+    now = _utc_now()
+    if path.exists():
+        data = _read_json(path)
+        data["last_seen"] = now
+        data["status"] = "online"
+        if name:
+            data["name"] = name
+        if cwd:
+            data["cwd"] = cwd
+        if blurb is not None:
+            data["blurb"] = blurb
+        agent = Agent.from_dict(data)
+    else:
+        agent = Agent(
+            id=agent_id,
+            name=name or agent_id,
+            blurb=blurb or "",
+            cwd=cwd,
+            started_at=now,
+            last_seen=now,
+            status="online",
+        )
+    _write_json_atomic(path, agent.to_dict())
+    (_agent_home(agent_id) / "inbox").mkdir(parents=True, exist_ok=True)
+    return agent
+
+
+def get_agent(agent_id: str) -> Agent | None:
+    """Return the agent with ``agent_id``, or ``None`` if not registered."""
+    path = _agent_path(agent_id)
+    if not path.exists():
+        return None
+    return Agent.from_dict(_read_json(path))
+
+
+def set_bio(agent_id: str, blurb: str) -> Agent:
+    """Update an agent's self-description.
+
+    Raises:
+        BoardError: If the agent is not registered.
+    """
+    agent = get_agent(agent_id)
+    if agent is None:
+        raise BoardError(f"agent '{agent_id}' is not registered")
+    agent.blurb = blurb
+    agent.last_seen = _utc_now()
+    _write_json_atomic(_agent_path(agent_id), agent.to_dict())
+    return agent
+
+
+def set_status(agent_id: str, status: str) -> None:
+    """Set an agent's ``status`` (e.g. ``"offline"``); no-op if unregistered."""
+    agent = get_agent(agent_id)
+    if agent is None:
+        return
+    agent.status = status
+    agent.last_seen = _utc_now()
+    _write_json_atomic(_agent_path(agent_id), agent.to_dict())
+
+
+def list_agents() -> list[Agent]:
+    """Return all registered agents, sorted by name."""
+    adir = config.agents_dir()
+    if not adir.exists():
+        return []
+    agents = [Agent.from_dict(_read_json(p)) for p in adir.glob("*.json")]
+    return sorted(agents, key=lambda a: a.name.lower())
+
+
+def resolve_agent(target: str) -> str | None:
+    """Resolve a ``--to`` target (an id or a name) to an agent id.
+
+    Args:
+        target: An agent id or a (case-insensitive) name.
+
+    Returns:
+        The matching agent id, or ``None`` if nothing matches.
+    """
+    path = _agent_path(target)
+    if path.exists():
+        # Return the canonical id from the record, not the caller's spelling --
+        # on case-insensitive filesystems ``target`` may differ in case.
+        return Agent.from_dict(_read_json(path)).id
+    for agent in list_agents():
+        if agent.name.lower() == target.lower():
+            return agent.id
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Inbox (invites + notifications)
+# --------------------------------------------------------------------------- #
+def deliver(agent_id: str, item: dict[str, Any]) -> int:
+    """Append a notification ``item`` to an agent's inbox.
+
+    Returns:
+        The inbox sequence number assigned to the item.
+    """
+    payload = {"ts": _utc_now(), **item}
+    return _append_numbered(_agent_home(agent_id) / "inbox", payload)
+
+
+# --------------------------------------------------------------------------- #
+# Channels
+# --------------------------------------------------------------------------- #
+def _channel_dir(channel_id: str) -> Path:
+    return config.channels_dir() / channel_id
+
+
+def _meta_path(channel_id: str) -> Path:
+    return _channel_dir(channel_id) / "meta.json"
+
+
+def load_channel(channel_id: str) -> Channel:
+    """Load a channel's metadata.
+
+    Raises:
+        BoardError: If the channel does not exist.
+    """
+    path = _meta_path(channel_id)
+    if not path.exists():
+        raise BoardError(f"channel '{channel_id}' not found (it may be closed)")
+    return Channel.from_dict(_read_json(path))
+
+
+def create_channel(creator_id: str, target: str, topic: str = "") -> Channel:
+    """Open a channel between the creator and a target agent.
+
+    Both agents are added as members immediately and an invite notification is
+    delivered to the target's inbox.
+
+    Args:
+        creator_id: The agent opening the channel.
+        target: The other agent, given as an id or a name.
+        topic: Optional free-text subject.
+
+    Returns:
+        The newly created :class:`~agent_board.models.Channel`.
+
+    Raises:
+        BoardError: If ``target`` cannot be resolved to a registered agent.
+    """
+    config.ensure_layout()
+    target_id = resolve_agent(target)
+    if target_id is None:
+        raise BoardError(f"no registered agent matches '{target}'")
+
+    channel_id = secrets.token_hex(4)
+    cdir = _channel_dir(channel_id)
+    (cdir / "messages").mkdir(parents=True)
+    (cdir / "artifacts").mkdir()
+    (cdir / "close").mkdir()
+
+    members = [creator_id] if creator_id == target_id else [creator_id, target_id]
+    channel = Channel(
+        id=channel_id, topic=topic, members=members, created=_utc_now(), status="open"
+    )
+    _write_json_atomic(_meta_path(channel_id), channel.to_dict())
+    _append_event(channel_id, creator_id, "system", text=f"channel opened by {creator_id}")
+    deliver(
+        target_id,
+        {"type": "invite", "channel": channel_id, "from": creator_id, "topic": topic},
+    )
+    logger.debug("created channel {} ({} -> {})", channel_id, creator_id, target_id)
+    return channel
+
+
+def accept_channel(channel_id: str, agent_id: str) -> None:
+    """Mark an agent as having joined a channel by posting a ``joined`` event.
+
+    Raises:
+        BoardError: If the channel does not exist or the agent is not a member.
+    """
+    channel = load_channel(channel_id)
+    if agent_id not in channel.members:
+        raise BoardError(f"agent '{agent_id}' is not a member of channel '{channel_id}'")
+    _append_event(channel_id, agent_id, "system", text=f"{agent_id} joined")
+
+
+def _append_event(
+    channel_id: str,
+    author: str,
+    etype: str,
+    text: str | None = None,
+    artifact: dict[str, Any] | None = None,
+) -> Event:
+    """Append an event to a channel's log and return it."""
+    payload: dict[str, Any] = {
+        "ts": _utc_now(),
+        "author": author,
+        "type": etype,
+        "text": text,
+        "artifact": artifact,
+    }
+    seq = _append_numbered(_channel_dir(channel_id) / "messages", payload)
+    payload["seq"] = seq
+    return Event.from_dict(payload)
+
+
+def post(
+    channel_id: str, author: str, text: str | None = None, artifact_path: str | None = None
+) -> Event:
+    """Post a message and/or share an artifact to a channel.
+
+    Args:
+        channel_id: Target channel.
+        author: Posting agent id.
+        text: Optional message body.
+        artifact_path: Optional path to a file to copy into the channel.
+
+    Returns:
+        The appended :class:`~agent_board.models.Event`.
+
+    Raises:
+        BoardError: If the channel is missing, the author is not a member, or
+            neither ``text`` nor ``artifact_path`` is provided.
+    """
+    channel = load_channel(channel_id)
+    if author not in channel.members:
+        raise BoardError(f"agent '{author}' is not a member of channel '{channel_id}'")
+    if text is None and artifact_path is None:
+        raise BoardError("nothing to post: provide --text and/or --artifact")
+
+    artifact: dict[str, Any] | None = None
+    if artifact_path is not None:
+        src = Path(artifact_path)
+        if not src.is_file():
+            raise BoardError(f"artifact '{artifact_path}' is not a readable file")
+        artifact_id = f"{secrets.token_hex(4)}_{src.name}"
+        dest = _channel_dir(channel_id) / "artifacts" / artifact_id
+        shutil.copyfile(src, dest)
+        artifact = {"id": artifact_id, "name": src.name, "size": dest.stat().st_size}
+
+    etype = "artifact" if artifact is not None else "message"
+    return _append_event(channel_id, author, etype, text=text, artifact=artifact)
+
+
+def read_events(channel_id: str, since: int = 0) -> tuple[list[Event], int]:
+    """Return events with ``seq > since`` plus the channel's current head.
+
+    Args:
+        channel_id: Target channel.
+        since: Cursor; only events strictly newer than this are returned.
+
+    Returns:
+        A ``(events, head)`` tuple where ``head`` is the maximum sequence number
+        present (0 if the channel is empty).
+
+    Raises:
+        BoardError: If the channel does not exist.
+    """
+    load_channel(channel_id)  # existence check
+    mdir = _channel_dir(channel_id) / "messages"
+    seqs = _seq_files(mdir)
+    events = [
+        Event.from_dict(_read_json(mdir / f"{s:0{_SEQ_WIDTH}d}.json")) for s in seqs if s > since
+    ]
+    head = seqs[-1] if seqs else 0
+    return events, head
+
+
+def artifact_path(channel_id: str, artifact_id: str) -> Path:
+    """Return the on-disk path of a shared artifact.
+
+    Raises:
+        BoardError: If the artifact does not exist in the channel.
+    """
+    path = _channel_dir(channel_id) / "artifacts" / artifact_id
+    if not path.exists():
+        raise BoardError(f"artifact '{artifact_id}' not found in channel '{channel_id}'")
+    return path
+
+
+def member_channels(agent_id: str) -> list[Channel]:
+    """Return all open channels that ``agent_id`` is a member of, sorted by id."""
+    cdir = config.channels_dir()
+    if not cdir.exists():
+        return []
+    result: list[Channel] = []
+    for meta in cdir.glob("*/meta.json"):
+        channel = Channel.from_dict(_read_json(meta))
+        if agent_id in channel.members:
+            result.append(channel)
+    return sorted(result, key=lambda c: c.id)
+
+
+def vote_close(channel_id: str, agent_id: str) -> bool:
+    """Record an agent's vote to close a channel; delete it once all have voted.
+
+    Args:
+        channel_id: Target channel.
+        agent_id: Voting member.
+
+    Returns:
+        ``True`` if this vote completed the set and the channel was deleted,
+        ``False`` if more members still need to vote.
+
+    Raises:
+        BoardError: If the channel is missing or the agent is not a member.
+    """
+    channel = load_channel(channel_id)
+    if agent_id not in channel.members:
+        raise BoardError(f"agent '{agent_id}' is not a member of channel '{channel_id}'")
+
+    close_dir = _channel_dir(channel_id) / "close"
+    close_dir.mkdir(exist_ok=True)
+    (close_dir / agent_id).write_text(_utc_now())
+
+    voted = {p.name for p in close_dir.iterdir()}
+    if set(channel.members).issubset(voted):
+        shutil.rmtree(_channel_dir(channel_id))
+        logger.debug("closed and deleted channel {}", channel_id)
+        return True
+
+    channel.status = "closing"
+    _write_json_atomic(_meta_path(channel_id), channel.to_dict())
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Cursors + aggregated checks
+# --------------------------------------------------------------------------- #
+def _cursors_path(agent_id: str) -> Path:
+    return _agent_home(agent_id) / "cursors.json"
+
+
+def get_cursors(agent_id: str) -> dict[str, int]:
+    """Return the agent's per-channel (and ``inbox``) cursor map."""
+    path = _cursors_path(agent_id)
+    if not path.exists():
+        return {}
+    return {k: int(v) for k, v in _read_json(path).items()}
+
+
+def _write_cursors(agent_id: str, cursors: dict[str, int]) -> None:
+    _agent_home(agent_id).mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(_cursors_path(agent_id), cursors)
+
+
+def check_messages(agent_id: str, advance: bool = True) -> dict[str, Any]:
+    """Collect everything new for an agent since its last cursors.
+
+    Scans the agent's inbox and every open channel it belongs to, returning only
+    items newer than the stored cursor. When ``advance`` is true the cursors are
+    moved forward so the same items are not reported twice.
+
+    Args:
+        agent_id: The agent to check on behalf of.
+        advance: Whether to persist advanced cursors.
+
+    Returns:
+        A mapping ``{"invites": [...], "channels": {cid: {"topic", "events"}}}``.
+    """
+    cursors = get_cursors(agent_id)
+
+    inbox = _agent_home(agent_id) / "inbox"
+    inbox_seqs = _seq_files(inbox)
+    inbox_last = cursors.get("inbox", 0)
+    invites = [_read_json(inbox / f"{s:0{_SEQ_WIDTH}d}.json") for s in inbox_seqs if s > inbox_last]
+    if inbox_seqs and advance:
+        cursors["inbox"] = inbox_seqs[-1]
+
+    channels: dict[str, Any] = {}
+    for channel in member_channels(agent_id):
+        last = cursors.get(channel.id, 0)
+        events, head = read_events(channel.id, last)
+        # Surface only others' events (an agent should not be woken by its own
+        # posts), but still advance the cursor past everything that was read.
+        foreign = [e for e in events if e.author != agent_id]
+        if foreign:
+            channels[channel.id] = {
+                "topic": channel.topic,
+                "events": [e.to_dict() for e in foreign],
+            }
+        if events and advance:
+            cursors[channel.id] = head
+
+    if advance:
+        _write_cursors(agent_id, cursors)
+    return {"invites": invites, "channels": channels}
+
+
+def has_updates(result: dict[str, Any]) -> bool:
+    """Return ``True`` if a :func:`check_messages` result contains anything new."""
+    return bool(result.get("invites")) or bool(result.get("channels"))
+
+
+# --------------------------------------------------------------------------- #
+# Garbage collection
+# --------------------------------------------------------------------------- #
+def _channel_last_activity(channel_id: str) -> float:
+    """Return the mtime of a channel's most recently touched file."""
+    cdir = _channel_dir(channel_id)
+    mtimes = [p.stat().st_mtime for p in cdir.rglob("*") if p.is_file()]
+    mtimes.append(cdir.stat().st_mtime)
+    return max(mtimes)
+
+
+def gc(ttl: int | None = None, now: float | None = None) -> dict[str, list[str]]:
+    """Reap idle channels and mark stale agents offline.
+
+    Args:
+        ttl: Channel idle TTL in seconds; defaults to :func:`config.ttl_seconds`.
+        now: Override for the current epoch time (used in tests).
+
+    Returns:
+        A mapping ``{"reaped_channels": [...], "offline_agents": [...]}``.
+    """
+    ttl = config.ttl_seconds() if ttl is None else ttl
+    now = time.time() if now is None else now
+
+    reaped: list[str] = []
+    cdir = config.channels_dir()
+    if cdir.exists():
+        for child in cdir.iterdir():
+            if not (child / "meta.json").exists():
+                continue
+            if now - _channel_last_activity(child.name) > ttl:
+                shutil.rmtree(child)
+                reaped.append(child.name)
+                logger.debug("gc reaped idle channel {}", child.name)
+
+    offline: list[str] = []
+    for agent in list_agents():
+        if agent.status == "online" and agent.last_seen:
+            try:
+                seen = datetime.fromisoformat(agent.last_seen).timestamp()
+            except ValueError:
+                continue
+            if now - seen > config.DEFAULT_AGENT_STALE_SECONDS:
+                set_status(agent.id, "offline")
+                offline.append(agent.id)
+
+    return {"reaped_channels": reaped, "offline_agents": offline}

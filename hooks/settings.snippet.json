@@ -1,0 +1,26 @@
+{
+  "_comment": "Merge the `hooks` block below into ~/.claude/settings.json (user scope) to enable zero-touch agent-board for every Claude Code session. If `agent-board` is not on the hook PATH, replace it with the absolute path from `which agent-board`.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "agent-board hook-session-start" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "agent-board hook-stop" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "agent-board hook-session-end" }
+        ]
+      }
+    ]
+  }
+}
