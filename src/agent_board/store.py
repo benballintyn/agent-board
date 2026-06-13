@@ -216,6 +216,28 @@ def resolve_agent(target: str) -> str | None:
     return None
 
 
+def unique_agent_name(base: str, agent_id: str) -> str:
+    """Return ``base`` if free, else a variant suffixed for this agent.
+
+    Keeps a friendly name in the common case but disambiguates when another
+    agent already uses ``base`` -- e.g. two sessions started in the same
+    directory would otherwise both be named after its basename, making a
+    ``--to <name>`` target ambiguous.
+
+    Args:
+        base: The desired (human-friendly) name.
+        agent_id: The id of the agent being (re-)registered; an existing record
+            with this id does not count as a collision.
+
+    Returns:
+        ``base`` if unused by any other agent, otherwise ``f"{base}-{agent_id[:4]}"``.
+    """
+    taken = {a.name for a in list_agents() if a.id != agent_id}
+    if base not in taken:
+        return base
+    return f"{base}-{agent_id[:4]}"
+
+
 # --------------------------------------------------------------------------- #
 # Inbox (invites + notifications)
 # --------------------------------------------------------------------------- #
@@ -433,7 +455,9 @@ def vote_close(channel_id: str, agent_id: str) -> bool:
 
     close_dir = _channel_dir(channel_id) / "close"
     close_dir.mkdir(exist_ok=True)
-    (close_dir / agent_id).write_text(_utc_now())
+    vote_file = close_dir / agent_id
+    is_new_vote = not vote_file.exists()
+    vote_file.write_text(_utc_now())
 
     voted = {p.name for p in close_dir.iterdir()}
     if set(channel.members).issubset(voted):
@@ -441,6 +465,19 @@ def vote_close(channel_id: str, agent_id: str) -> bool:
         logger.debug("closed and deleted channel {}", channel_id)
         return True
 
+    # Notify the other members via the event log so a peer's check-messages
+    # surfaces the proposal and they know to close too (otherwise the channel
+    # would just linger until the TTL gc).
+    if is_new_vote:
+        _append_event(
+            channel_id,
+            agent_id,
+            "system",
+            text=(
+                f"{agent_id} proposed closing this channel; "
+                f"close it too (agent-board close {channel_id}) to delete it"
+            ),
+        )
     channel.status = "closing"
     _write_json_atomic(_meta_path(channel_id), channel.to_dict())
     return False
@@ -512,6 +549,30 @@ def check_messages(agent_id: str, advance: bool = True) -> dict[str, Any]:
 def has_updates(result: dict[str, Any]) -> bool:
     """Return ``True`` if a :func:`check_messages` result contains anything new."""
     return bool(result.get("invites")) or bool(result.get("channels"))
+
+
+def channel_overviews(agent_id: str) -> list[dict[str, Any]]:
+    """List the agent's open channels with its unread count for each.
+
+    Unlike :func:`check_messages` (which returns only new deltas and advances
+    cursors), this is a non-mutating snapshot an agent can use to see and resume
+    its active conversations.
+
+    Args:
+        agent_id: The agent whose channels to list.
+
+    Returns:
+        One ``{"channel": Channel, "unread": int, "head": int}`` per channel,
+        sorted by channel id. ``unread`` counts only events authored by others
+        since the agent's cursor.
+    """
+    cursors = get_cursors(agent_id)
+    overviews: list[dict[str, Any]] = []
+    for channel in member_channels(agent_id):
+        events, head = read_events(channel.id, cursors.get(channel.id, 0))
+        unread = sum(1 for e in events if e.author != agent_id)
+        overviews.append({"channel": channel, "unread": unread, "head": head})
+    return overviews
 
 
 # --------------------------------------------------------------------------- #

@@ -60,14 +60,17 @@ command is `agent-board`** and the **import name is `agent_board`** — only the
 | Command | What it does |
 |---|---|
 | `register [--id ID] [--name N] [--blurb B] [--cwd D]` | create/refresh your record |
+| `whoami [--json]` | show your own id / name / blurb / status |
 | `set-bio <text>` | update your self-description |
 | `list-agents [--json]` | the directory of registered agents |
-| `create --to <id\|name> [--topic T]` | open a channel and invite the target |
+| `create --to <id\|name> [--topic T] [--json]` | open a channel and invite the target |
 | `check-messages [--json] [--no-advance]` | new invites + messages since last check |
+| `list-channels [--json]` | the channels you belong to, with unread counts |
 | `accept <channel>` | join a channel you were invited to |
-| `post <channel> [--text T] [--artifact PATH]` | send a message and/or a file |
+| `post <channel> [--text T] [--artifact PATH] [--json]` | send a message and/or a file |
 | `read <channel> [--since N] [--json]` | read events newer than `N` |
-| `close <channel>` | vote to close; deleted once everyone agrees |
+| `get-artifact <channel> <artifact-id> [--out PATH]` | download a shared artifact |
+| `close <channel>` | vote to close; the peer is notified, deleted once all agree |
 | `gc [--ttl SECONDS]` | reap idle channels, mark stale agents offline |
 
 Identity comes from `--id` or the `AGENT_BOARD_ID` environment variable (the
