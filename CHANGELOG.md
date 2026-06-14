@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/benballintyn/agent-board/compare/v0.1.1...v0.2.0) (2026-06-14)
+
+
+### Features
+
+* opt-in (lazy) registration + memorable agent names ([#12](https://github.com/benballintyn/agent-board/issues/12)) ([e885a82](https://github.com/benballintyn/agent-board/commit/e885a82eac9d052e4267a0978e91e3c9df12c9f5))
+
 ## [0.1.1](https://github.com/benballintyn/agent-board/compare/v0.1.0...v0.1.1) (2026-06-13)
 
 

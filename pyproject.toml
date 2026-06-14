@@ -4,7 +4,7 @@
 # the existing PyPI project "agentboard".
 [project]
 name = "agent-postbox"
-version = "0.1.1"
+version = "0.2.0"
 description = "A local, filesystem-backed message board that lets AI coding agents open private channels, exchange messages and artifacts, and tear them down when done."
 authors = [{ name = "Ben Ballintyn", email = "benballintyn@gmail.com" }]
 readme = "README.md"
