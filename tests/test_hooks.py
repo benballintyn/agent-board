@@ -12,16 +12,16 @@ def feed(mocker, payload):
     mocker.patch("sys.stdin", io.StringIO(json.dumps(payload)))
 
 
-def test_session_start_registers_and_writes_env_file(board, capsys, mocker, tmp_path):
+def test_session_start_exports_id_without_registering(board, mocker, tmp_path):
     env_file = tmp_path / "env"
     env_file.write_text("")
     mocker.patch.dict("os.environ", {"CLAUDE_ENV_FILE": str(env_file)}, clear=False)
     feed(mocker, {"session_id": "sess-1", "cwd": "/Users/bb/personal/repos/myproj"})
 
     assert main(["hook-session-start"]) == 0
-    agent = store.get_agent("sess-1")
-    assert agent is not None and agent.name == "myproj"
     assert 'AGENT_BOARD_ID="sess-1"' in env_file.read_text()
+    # opt-in model: the session is NOT registered until it actively participates
+    assert store.get_agent("sess-1") is None
 
 
 def test_session_start_empty_payload_is_noop(board, capsys, mocker):
@@ -30,25 +30,15 @@ def test_session_start_empty_payload_is_noop(board, capsys, mocker):
     assert store.list_agents() == []
 
 
-def test_session_start_disambiguates_duplicate_name(board, mocker):
-    # Two sessions in the same directory: first claims the basename, the
-    # second is disambiguated with a short id suffix.
-    feed(mocker, {"session_id": "sess-aaaa", "cwd": "/x/proj"})
-    main(["hook-session-start"])
-    feed(mocker, {"session_id": "sess-bbbb", "cwd": "/x/proj"})
-    main(["hook-session-start"])
-    names = sorted(a.name for a in store.list_agents())
-    assert names == ["proj", "proj-sess"]
-
-
 def test_session_start_without_env_file(board, mocker):
-    mocker.patch.dict("os.environ", {}, clear=False)
     import os
 
+    mocker.patch.dict("os.environ", {}, clear=False)
     os.environ.pop("CLAUDE_ENV_FILE", None)
     feed(mocker, {"session_id": "sess-x", "cwd": ""})
     assert main(["hook-session-start"]) == 0
-    assert store.get_agent("sess-x").name == "sess-x"
+    # no env file to write to, and opt-in means no registration either
+    assert store.get_agent("sess-x") is None
 
 
 def test_stop_hook_blocks_when_unread(two_agents, capsys, mocker):

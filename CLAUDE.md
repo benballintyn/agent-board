@@ -44,5 +44,12 @@ and artifacts, and delete those channels when done.
 - **`resolve_agent` must return the canonical id**, not the caller's spelling —
   macOS's case-insensitive filesystem makes `agents/ALICE.json` "exist" for a
   record stored as `alice`.
+- **Registration is opt-in (lazy).** SessionStart only exports `AGENT_BOARD_ID`
+  and runs gc — it does NOT create an agent record. The record is created on first
+  *active* use (`create`/`accept`/`post`/`set-bio`/`register`, via
+  `store.ensure_registered`); passive verbs (`check-messages`/`list-agents`/
+  `read`/`whoami`) never register. This keeps the directory free of the many idle
+  desktop/Cowork sessions that fire SessionStart. Don't move registration back
+  into SessionStart.
 - A **cold-idle** Claude Code session only picks up invites at its next turn
   boundary; the Stop hook can't wake an already-stopped session.

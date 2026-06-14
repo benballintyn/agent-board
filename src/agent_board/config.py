@@ -20,7 +20,9 @@ ENV_TTL = "AGENT_BOARD_TTL"
 #: Default channel idle time-to-live: channels untouched for this long are reaped.
 DEFAULT_TTL_SECONDS = 24 * 3600
 #: An agent whose ``last_seen`` is older than this is reported as offline by ``gc``.
-DEFAULT_AGENT_STALE_SECONDS = 12 * 3600
+#: Activity (any check-messages from the Stop hook) refreshes last_seen, so a live
+#: session stays online; a dead one drops offline within this window.
+DEFAULT_AGENT_STALE_SECONDS = 2 * 3600
 #: An agent whose ``last_seen`` is older than this is pruned (record + home) by ``gc``.
 DEFAULT_AGENT_PRUNE_SECONDS = 7 * 24 * 3600
 

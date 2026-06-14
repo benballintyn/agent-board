@@ -24,6 +24,7 @@ Layout::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -281,6 +282,103 @@ def unique_agent_name(base: str, agent_id: str) -> str:
     if base not in taken:
         return base
     return f"{base}-{agent_id[:4]}"
+
+
+_ADJECTIVES = (
+    "amber",
+    "brisk",
+    "calm",
+    "clever",
+    "crimson",
+    "dapper",
+    "eager",
+    "fleet",
+    "gentle",
+    "jolly",
+    "keen",
+    "lively",
+    "mellow",
+    "nimble",
+    "plucky",
+    "quiet",
+    "rapid",
+    "sage",
+    "swift",
+    "witty",
+)
+_ANIMALS = (
+    "otter",
+    "heron",
+    "lynx",
+    "falcon",
+    "badger",
+    "marten",
+    "gecko",
+    "raven",
+    "ibex",
+    "tapir",
+    "koala",
+    "civet",
+    "quokka",
+    "numbat",
+    "fennec",
+    "wombat",
+    "osprey",
+    "dingo",
+    "sable",
+    "oryx",
+)
+
+
+def _generate_name(agent_id: str) -> str:
+    """Derive a memorable ``adjective-animal`` handle deterministically from an id.
+
+    Deterministic so a session keeps the same name across resume/compact
+    re-fires. Collisions are possible (400 combinations) and resolved by
+    :func:`unique_agent_name`.
+    """
+    digest = int(hashlib.sha256(agent_id.encode()).hexdigest(), 16)
+    adjective = _ADJECTIVES[digest % len(_ADJECTIVES)]
+    animal = _ANIMALS[(digest // len(_ADJECTIVES)) % len(_ANIMALS)]
+    return f"{adjective}-{animal}"
+
+
+def ensure_registered(
+    agent_id: str, name: str | None = None, blurb: str | None = None, cwd: str = ""
+) -> Agent:
+    """Register an agent on first participation, or refresh it if already known.
+
+    This is the **opt-in** entry point: the active verbs (create/accept/post/
+    set-bio/register) call it so a session only joins the board once it actually
+    engages. Passive checks (check-messages, list-agents, read, whoami) never
+    call it, so idle sessions never clutter the directory.
+
+    Args:
+        agent_id: The acting agent.
+        name: Explicit display name; defaults to a unique memorable handle.
+        blurb: Explicit self-description; on first registration defaults to the
+            working directory. ``None`` leaves an existing blurb untouched.
+        cwd: Working directory to record (and seed the default blurb from).
+
+    Returns:
+        The persisted :class:`~agent_board.models.Agent`.
+    """
+    existing = get_agent(agent_id)
+    if existing is None:
+        final_name = name or unique_agent_name(_generate_name(agent_id), agent_id)
+        final_blurb = blurb if blurb is not None else (f"working in {cwd}" if cwd else "")
+        return register_agent(agent_id, name=final_name, blurb=final_blurb, cwd=cwd)
+
+    if name:
+        existing.name = name
+    if blurb is not None:
+        existing.blurb = blurb
+    if cwd:
+        existing.cwd = cwd
+    existing.status = "online"
+    existing.last_seen = _utc_now()
+    _write_json_atomic(_agent_path(agent_id), existing.to_dict())
+    return existing
 
 
 # --------------------------------------------------------------------------- #
@@ -561,7 +659,13 @@ def check_messages(agent_id: str, advance: bool = True) -> dict[str, Any]:
 
     Returns:
         A mapping ``{"invites": [...], "channels": {cid: {"topic", "events"}}}``.
+        Empty (with no side effects) if the agent has not opted in / registered.
     """
+    # Passive check: never registers an unregistered session (opt-in model), but
+    # does refresh presence for one that has joined the board.
+    if get_agent(agent_id) is None:
+        return {"invites": [], "channels": {}}
+    set_status(agent_id, "online")
     cursors = get_cursors(agent_id)
 
     inbox = _agent_home(agent_id) / "inbox"

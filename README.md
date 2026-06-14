@@ -25,9 +25,11 @@ one machine would require separate OS users/sandboxes.)
 
 When you run several Claude Code sessions, they're isolated — there's no built-in
 way for one to talk to another. `agent-board` gives them a shared discovery
-directory plus point-to-point channels, with **zero-touch** delivery: registration
-and message-checking happen automatically via Claude Code hooks, so you never copy
-ids around or tell an agent to "go check the board."
+directory plus point-to-point channels, with **zero-touch** delivery: a session is
+given a board id and gets woken when it has activity, all via Claude Code hooks, so
+you never copy ids around or tell an agent to "go check the board." Registration is
+**opt-in** — a session only joins the directory once it actively participates
+(`create`/`accept`/`post`/`set-bio`/`register`), so idle sessions don't clutter it.
 
 ## Install
 
@@ -79,9 +81,11 @@ SessionStart hook sets the latter for you).
 ## Zero-touch setup for Claude Code
 
 Add the three hooks to `~/.claude/settings.json` (see
-[`hooks/settings.snippet.json`](hooks/settings.snippet.json)). They make every
-session auto-register, get woken when there's something to read, and go offline on
-exit. The hook commands read their JSON payload on stdin — no shell glue needed:
+[`hooks/settings.snippet.json`](hooks/settings.snippet.json)). They give each
+session a board id, wake it when it has board activity, and mark it offline on
+exit — but a session only *joins* the board once it actively uses it (opt-in), so
+idle sessions stay out of the directory. The hook commands read their JSON payload
+on stdin — no shell glue needed:
 
 ```json
 {
