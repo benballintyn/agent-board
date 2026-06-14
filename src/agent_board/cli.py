@@ -102,16 +102,19 @@ def _read_hook_payload(stdin: TextIO) -> dict[str, Any]:
 # Verb implementations
 # --------------------------------------------------------------------------- #
 def cmd_register(args: argparse.Namespace, out: TextIO) -> int:
-    """Create or refresh this agent's record."""
+    """Explicitly join the board (also done automatically on first active use)."""
     agent_id = _require_agent_id(args)
-    agent = store.register_agent(agent_id, name=args.name, blurb=args.blurb, cwd=args.cwd or "")
+    agent = store.ensure_registered(
+        agent_id, name=args.name, blurb=args.blurb, cwd=args.cwd or os.getcwd()
+    )
     out.write(f"registered '{agent.name}' (id={agent.id})\n")
     return 0
 
 
 def cmd_set_bio(args: argparse.Namespace, out: TextIO) -> int:
-    """Update this agent's self-description."""
-    agent = store.set_bio(_require_agent_id(args), args.text)
+    """Set this agent's self-description (joins the board if not already)."""
+    agent_id = _require_agent_id(args)
+    agent = store.ensure_registered(agent_id, blurb=args.text, cwd=os.getcwd())
     out.write(f"bio updated for '{agent.name}'\n")
     return 0
 
@@ -134,6 +137,7 @@ def cmd_list_agents(args: argparse.Namespace, out: TextIO) -> int:
 def cmd_create(args: argparse.Namespace, out: TextIO) -> int:
     """Open a channel with another agent and invite them."""
     creator = _require_agent_id(args)
+    store.ensure_registered(creator, cwd=os.getcwd())
     channel = store.create_channel(creator, args.to, topic=args.topic or "")
     if args.json:
         _emit_json({"channel": channel.id, "topic": channel.topic, "members": channel.members}, out)
@@ -162,6 +166,7 @@ def cmd_check_messages(args: argparse.Namespace, out: TextIO) -> int:
 def cmd_accept(args: argparse.Namespace, out: TextIO) -> int:
     """Join a channel you were invited to."""
     agent_id = _require_agent_id(args)
+    store.ensure_registered(agent_id, cwd=os.getcwd())
     store.accept_channel(args.channel, agent_id)
     out.write(f"joined channel {args.channel}\n")
     return 0
@@ -170,6 +175,7 @@ def cmd_accept(args: argparse.Namespace, out: TextIO) -> int:
 def cmd_post(args: argparse.Namespace, out: TextIO) -> int:
     """Post a message and/or share an artifact."""
     agent_id = _require_agent_id(args)
+    store.ensure_registered(agent_id, cwd=os.getcwd())
     event = store.post(args.channel, agent_id, text=args.text, artifact_path=args.artifact)
     if args.json:
         _emit_json(
@@ -282,20 +288,18 @@ def cmd_gc(args: argparse.Namespace, out: TextIO) -> int:
 # Hook implementations (payload arrives as JSON on stdin)
 # --------------------------------------------------------------------------- #
 def cmd_hook_session_start(args: argparse.Namespace, out: TextIO) -> int:
-    """SessionStart: auto-register the session and export its agent id.
+    """SessionStart: expose the session's agent id and run gc -- but do NOT register.
 
-    Reads ``{"session_id", "cwd"}`` from stdin, registers the agent, appends an
-    ``export AGENT_BOARD_ID=...`` line to ``$CLAUDE_ENV_FILE`` so later commands
-    are identified automatically, and opportunistically runs gc.
+    Opt-in model: this only appends an ``export AGENT_BOARD_ID=...`` line to
+    ``$CLAUDE_ENV_FILE`` so the id is ready *if* the session later chooses to use
+    the board, and opportunistically runs gc. The agent record is created lazily
+    on first active use (create/post/accept/set-bio/register), so idle sessions
+    never appear on the board.
     """
     payload = _read_hook_payload(sys.stdin)
     session_id = payload.get("session_id")
     if not session_id:
         return 0
-    cwd = payload.get("cwd", "")
-    base = os.path.basename(cwd.rstrip("/")) if cwd else session_id
-    name = store.unique_agent_name(base or session_id, session_id)
-    store.register_agent(session_id, name=name, cwd=cwd)
 
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if env_file:

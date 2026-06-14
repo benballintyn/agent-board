@@ -252,3 +252,23 @@ def test_whoami_unregistered(board, capsys):
 def test_whoami_json(two_agents, capsys):
     code, out, _ = run(capsys, "whoami", "--id", "bob", "--json")
     assert code == 0 and '"id": "bob"' in out
+
+
+# --- opt-in / lazy registration ------------------------------------------- #
+def test_check_messages_does_not_register(board, capsys):
+    code, out, _ = run(capsys, "check-messages", "--id", "fresh-id")
+    assert code == 0 and "nothing new" in out
+    assert store.get_agent("fresh-id") is None  # passive: did not join the board
+
+
+def test_whoami_does_not_register(board, capsys):
+    code, out, _ = run(capsys, "whoami", "--id", "fresh-id")
+    assert code == 0 and "not registered" in out
+    assert store.get_agent("fresh-id") is None
+
+
+def test_create_lazily_registers_creator(two_agents, capsys):
+    assert store.get_agent("newcomer") is None
+    run(capsys, "create", "--id", "newcomer", "--to", "alice")
+    agent = store.get_agent("newcomer")
+    assert agent is not None and "-" in agent.name  # auto-joined with a memorable name

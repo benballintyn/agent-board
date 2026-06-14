@@ -251,6 +251,42 @@ def test_unique_agent_name_collision_gets_suffix(two_agents):
     assert store.unique_agent_name("alice", "zz99") == "alice-zz99"
 
 
+# --- opt-in registration + memorable names -------------------------------- #
+def test_generate_name_deterministic_and_shaped(board):
+    assert store._generate_name("session-xyz") == store._generate_name("session-xyz")
+    name = store._generate_name("session-xyz")
+    assert "-" in name and name.replace("-", "").isalpha()
+
+
+def test_ensure_registered_creates_with_memorable_name(board):
+    agent = store.ensure_registered("sess-new", cwd="/Users/bb/personal/repos")
+    assert store.get_agent("sess-new") is not None
+    assert "-" in agent.name  # memorable handle, not the raw id
+    assert agent.blurb == "working in /Users/bb/personal/repos"
+    assert agent.status == "online"
+
+
+def test_ensure_registered_refreshes_existing_with_overrides(board):
+    store.register_agent("e1", name="Orig", blurb="orig", cwd="/a")
+    store.set_status("e1", "offline")
+    agent = store.ensure_registered("e1", name="New", blurb="new", cwd="/b")
+    assert (agent.name, agent.blurb, agent.cwd, agent.status) == ("New", "new", "/b", "online")
+
+
+def test_ensure_registered_existing_preserves_without_overrides(board):
+    store.register_agent("e2", name="Keep", blurb="keepblurb", cwd="/k")
+    agent = store.ensure_registered("e2")  # no name/blurb/cwd
+    assert (agent.name, agent.blurb, agent.cwd) == ("Keep", "keepblurb", "/k")
+    assert agent.status == "online"
+
+
+def test_check_messages_unregistered_is_empty_noop(board):
+    res = store.check_messages("ghost-session")
+    assert res == {"invites": [], "channels": {}}
+    assert store.get_agent("ghost-session") is None
+    assert not (config.agents_dir() / "ghost-session").exists()  # no side-effect dir
+
+
 # --- gc ------------------------------------------------------------------- #
 def test_gc_reaps_idle_channel(two_agents):
     channel = store.create_channel("alice", "bob")
