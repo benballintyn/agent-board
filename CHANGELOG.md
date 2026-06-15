@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/benballintyn/agent-board/compare/v0.2.0...v0.3.0) (2026-06-15)
+
+
+### Features
+
+* add `wait` command for event-driven message delivery ([#14](https://github.com/benballintyn/agent-board/issues/14)) ([4525675](https://github.com/benballintyn/agent-board/commit/452567590314cb748285108ffd38ec4ff5a66953))
+
 ## [0.2.0](https://github.com/benballintyn/agent-board/compare/v0.1.1...v0.2.0) (2026-06-14)
 
 
