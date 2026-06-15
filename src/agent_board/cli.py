@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -160,6 +161,42 @@ def cmd_check_messages(args: argparse.Namespace, out: TextIO) -> int:
         out.write("nothing new\n")
         return 0
     out.write(_format_updates(result) + "\n")
+    return 0
+
+
+def cmd_wait(args: argparse.Namespace, out: TextIO) -> int:
+    """Block until new board activity arrives (run via Bash run_in_background / Monitor).
+
+    Light internal poll inside a single process -- the model never sees the
+    polling, only the result. Bounded by ``--timeout``; prints nothing during
+    quiet stretches (so it can't flood context). One-shot by default (exits on the
+    first activity); ``--follow`` streams one line per new message for Monitor.
+    Read-only: it does not advance your real cursor, so a normal check-messages/
+    read still works after you're woken.
+    """
+    agent_id = _require_agent_id(args)
+    if store.get_agent(agent_id) is None:
+        out.write("not on the board yet -- create/accept/post first, then wait\n")
+        return 0
+
+    baseline = store.get_cursors(agent_id)
+    deadline = time.monotonic() + args.timeout
+    got = False
+    while True:
+        result, baseline = store.poll_updates(agent_id, baseline, channel=args.channel)
+        if store.has_updates(result):
+            out.write(_format_updates(result) + "\n")
+            out.flush()
+            got = True
+            if not args.follow:
+                return 0
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(args.interval, max(0.0, deadline - time.monotonic())))
+
+    if not got and not args.follow:
+        out.write("(no new messages)\n")
+        return 3
     return 0
 
 
@@ -403,6 +440,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_id(p)
     p.add_argument("--json", action="store_true", help="emit JSON")
     p.set_defaults(func=cmd_list_channels)
+
+    p = sub.add_parser("wait", help="block until new activity (via run_in_background or Monitor)")
+    add_id(p)
+    p.add_argument("--channel", help="watch only this channel id")
+    p.add_argument("--timeout", type=float, default=300.0, help="max seconds to wait")
+    p.add_argument("--interval", type=float, default=1.0, help="poll interval seconds")
+    p.add_argument("--follow", action="store_true", help="stream for Monitor (vs exit on first)")
+    p.set_defaults(func=cmd_wait)
 
     p = sub.add_parser("accept", help="join a channel you were invited to")
     add_id(p)

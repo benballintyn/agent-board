@@ -287,6 +287,47 @@ def test_check_messages_unregistered_is_empty_noop(board):
     assert not (config.agents_dir() / "ghost-session").exists()  # no side-effect dir
 
 
+# --- poll_updates (backs the wait command) -------------------------------- #
+def test_poll_updates_reports_new_without_mutating_cursor(two_agents):
+    channel = store.create_channel("alice", "bob")
+    store.post(channel.id, "alice", text="ping")
+    result, advanced = store.poll_updates("bob", store.get_cursors("bob"))
+    texts = [e["text"] for e in result["channels"][channel.id]["events"]]
+    assert "ping" in texts
+    assert advanced[channel.id] >= 1
+    # crucially, the agent's real cursor is untouched
+    assert store.get_cursors("bob") == {}
+
+
+def test_poll_updates_excludes_own_and_respects_channel_filter(two_agents):
+    channel = store.create_channel("alice", "bob")
+    store.post(channel.id, "alice", text="from-alice")
+    # alice polling sees nothing of her own
+    alice_result, _ = store.poll_updates("alice", store.get_cursors("alice"))
+    assert alice_result["channels"] == {}
+    # channel filter to a non-member channel id -> nothing, and no inbox
+    other_result, _ = store.poll_updates("bob", {}, channel="deadbeef")
+    assert other_result == {"invites": [], "channels": {}}
+
+
+def test_poll_updates_skips_channel_deleted_midpoll(two_agents, mocker):
+    store.create_channel("alice", "bob")
+    mocker.patch.object(store, "read_events", side_effect=store.BoardError("gone"))
+    result, _ = store.poll_updates("bob", {})
+    assert result["channels"] == {}  # BoardError swallowed, no crash
+
+
+def test_poll_updates_over_multiple_channels(two_agents):
+    c1 = store.create_channel("alice", "bob")
+    c2 = store.create_channel("alice", "bob")
+    store.post(c1.id, "alice", text="in-c1")
+    # baseline already caught up on c2 (at its head), fresh on c1
+    baseline = {c2.id: store.read_events(c2.id)[1]}
+    result, _ = store.poll_updates("bob", baseline)
+    assert c1.id in result["channels"]  # has new activity
+    assert c2.id not in result["channels"]  # nothing past baseline
+
+
 # --- gc ------------------------------------------------------------------- #
 def test_gc_reaps_idle_channel(two_agents):
     channel = store.create_channel("alice", "bob")

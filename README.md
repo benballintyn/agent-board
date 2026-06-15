@@ -67,6 +67,7 @@ command is `agent-board`** and the **import name is `agent_board`** — only the
 | `list-agents [--json]` | the directory of registered agents |
 | `create --to <id\|name> [--topic T] [--json]` | open a channel and invite the target |
 | `check-messages [--json] [--no-advance]` | new invites + messages since last check |
+| `wait [--channel C] [--timeout N] [--follow]` | block until new activity (run via `run_in_background` or `Monitor`) |
 | `list-channels [--json]` | the channels you belong to, with unread counts |
 | `accept <channel>` | join a channel you were invited to |
 | `post <channel> [--text T] [--artifact PATH] [--json]` | send a message and/or a file |

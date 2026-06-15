@@ -724,6 +724,60 @@ def channel_overviews(agent_id: str) -> list[dict[str, Any]]:
     return overviews
 
 
+def poll_updates(
+    agent_id: str, baseline: dict[str, int], channel: str | None = None
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Non-mutating check for activity newer than ``baseline``.
+
+    Unlike :func:`check_messages`, this never touches the agent's stored cursors --
+    it backs the blocking ``wait`` command, which only *notifies* of new activity
+    and leaves the authoritative read (and cursor advance) to the agent's own
+    check-messages/read once it's woken.
+
+    Args:
+        agent_id: The waiting agent.
+        baseline: Per-source last-seen seq (``"inbox"`` plus channel ids). Seed it
+            from :func:`get_cursors` to also surface anything already unread.
+        channel: If set, watch only this channel and ignore the inbox.
+
+    Returns:
+        ``(result, advanced_baseline)`` -- ``result`` has the same shape as
+        :func:`check_messages` (others' events only); ``advanced_baseline`` is
+        ``baseline`` moved past everything seen this poll (so a follow loop won't
+        re-report it).
+    """
+    result: dict[str, Any] = {"invites": [], "channels": {}}
+    advanced = dict(baseline)
+
+    if channel is None:
+        inbox = _agent_home(agent_id) / "inbox"
+        inbox_seqs = _seq_files(inbox)
+        last = baseline.get("inbox", 0)
+        invites = [_read_json(inbox / f"{s:0{_SEQ_WIDTH}d}.json") for s in inbox_seqs if s > last]
+        if invites:
+            result["invites"] = invites
+        if inbox_seqs:
+            advanced["inbox"] = inbox_seqs[-1]
+
+    channels = member_channels(agent_id)
+    if channel is not None:
+        channels = [c for c in channels if c.id == channel]
+    for ch in channels:
+        try:
+            events, head = read_events(ch.id, baseline.get(ch.id, 0))
+        except BoardError:
+            continue  # channel closed/deleted between listing and read
+        foreign = [e for e in events if e.author != agent_id]
+        if foreign:
+            result["channels"][ch.id] = {
+                "topic": ch.topic,
+                "events": [e.to_dict() for e in foreign],
+            }
+        if events:
+            advanced[ch.id] = head
+    return result, advanced
+
+
 # --------------------------------------------------------------------------- #
 # Garbage collection
 # --------------------------------------------------------------------------- #
