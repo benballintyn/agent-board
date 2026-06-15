@@ -700,6 +700,24 @@ def has_updates(result: dict[str, Any]) -> bool:
     return bool(result.get("invites")) or bool(result.get("channels"))
 
 
+def has_wakeworthy(result: dict[str, Any]) -> bool:
+    """Return ``True`` only for activity worth *interrupting* an agent over.
+
+    A wake should mean "a peer sent you something to act on" -- an invite, or a
+    message/artifact in a channel. Structural system events (a peer joining,
+    opening, or proposing to close a channel) are status changes: shown when the
+    agent reads, but never a reason to wake it. This is what ``wait`` and the Stop
+    hook gate on, so e.g. a peer's ``accept`` (a ``"… joined"`` system event) does
+    not falsely poke someone who's waiting for a reply.
+    """
+    if result.get("invites"):
+        return True
+    for info in result.get("channels", {}).values():
+        if any(e.get("type") in ("message", "artifact") for e in info["events"]):
+            return True
+    return False
+
+
 def channel_overviews(agent_id: str) -> list[dict[str, Any]]:
     """List the agent's open channels with its unread count for each.
 

@@ -55,6 +55,16 @@ def test_stop_hook_blocks_when_unread(two_agents, capsys, mocker):
     assert capsys.readouterr().out.strip() == ""
 
 
+def test_stop_hook_ignores_system_only_but_keeps_it(two_agents, capsys, mocker):
+    ch = store.create_channel("alice", "bob")
+    store.accept_channel(ch.id, "bob")  # alice's only new event is bob's "joined"
+    feed(mocker, {"session_id": "alice", "stop_hook_active": False})
+    assert main(["hook-stop"]) == 0
+    assert capsys.readouterr().out.strip() == ""  # not woken by a mere join
+    # and it wasn't consumed: alice still sees the join on a real check
+    assert store.has_updates(store.check_messages("alice", advance=False)) is True
+
+
 def test_stop_hook_respects_active_flag(two_agents, capsys, mocker):
     store.create_channel("alice", "bob")
     feed(mocker, {"session_id": "bob", "stop_hook_active": True})

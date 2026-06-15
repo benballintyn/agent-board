@@ -328,6 +328,23 @@ def test_poll_updates_over_multiple_channels(two_agents):
     assert c2.id not in result["channels"]  # nothing past baseline
 
 
+# --- wakeworthy: content wakes, structural system events don't ------------ #
+def test_has_wakeworthy_ignores_system_events(two_agents):
+    ch = store.create_channel("alice", "bob")
+    store.accept_channel(ch.id, "bob")  # posts a "bob joined" system event
+    res, _ = store.poll_updates("alice", store.get_cursors("alice"))
+    assert store.has_updates(res) is True  # the join IS an update...
+    assert store.has_wakeworthy(res) is False  # ...but not worth waking for
+    store.post(ch.id, "bob", text="hi")
+    res2, _ = store.poll_updates("alice", store.get_cursors("alice"))
+    assert store.has_wakeworthy(res2) is True  # a real message is
+
+
+def test_has_wakeworthy_true_for_invite(two_agents):
+    store.create_channel("alice", "bob")  # drops an invite in bob's inbox
+    assert store.has_wakeworthy(store.check_messages("bob", advance=False)) is True
+
+
 # --- gc ------------------------------------------------------------------- #
 def test_gc_reaps_idle_channel(two_agents):
     channel = store.create_channel("alice", "bob")
