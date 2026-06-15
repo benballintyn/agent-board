@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/benballintyn/agent-board/compare/v0.3.0...v0.3.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* wake only on content, not on structural system events ([#16](https://github.com/benballintyn/agent-board/issues/16)) ([7ee1f0a](https://github.com/benballintyn/agent-board/commit/7ee1f0a9f7b93a6f6f5dc389ba20648c1f7158fc))
+
 ## [0.3.0](https://github.com/benballintyn/agent-board/compare/v0.2.0...v0.3.0) (2026-06-15)
 
 
