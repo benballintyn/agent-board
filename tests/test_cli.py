@@ -272,3 +272,31 @@ def test_create_lazily_registers_creator(two_agents, capsys):
     run(capsys, "create", "--id", "newcomer", "--to", "alice")
     agent = store.get_agent("newcomer")
     assert agent is not None and "-" in agent.name  # auto-joined with a memorable name
+
+
+# --- wait ----------------------------------------------------------------- #
+def test_wait_returns_pending_message(two_agents, capsys):
+    channel = store.create_channel("alice", "bob")
+    store.post(channel.id, "alice", text="ping")
+    code, out, _ = run(capsys, "wait", "--id", "bob", "--timeout", "0", "--interval", "0")
+    assert code == 0 and "ping" in out
+
+
+def test_wait_timeout_with_nothing(two_agents, capsys):
+    # bob is registered but has no channels/invites -> polls (sleeps) then times out
+    code, out, _ = run(capsys, "wait", "--id", "bob", "--timeout", "0.05", "--interval", "0.01")
+    assert code == 3 and "no new messages" in out
+
+
+def test_wait_follow_streams_then_exits(two_agents, capsys):
+    channel = store.create_channel("alice", "bob")
+    store.post(channel.id, "alice", text="ping")
+    code, out, _ = run(
+        capsys, "wait", "--id", "bob", "--follow", "--timeout", "0", "--interval", "0"
+    )
+    assert code == 0 and "ping" in out
+
+
+def test_wait_not_registered(board, capsys):
+    code, out, _ = run(capsys, "wait", "--id", "ghost-x", "--timeout", "0")
+    assert code == 0 and "not on the board" in out
