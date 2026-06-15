@@ -300,3 +300,13 @@ def test_wait_follow_streams_then_exits(two_agents, capsys):
 def test_wait_not_registered(board, capsys):
     code, out, _ = run(capsys, "wait", "--id", "ghost-x", "--timeout", "0")
     assert code == 0 and "not on the board" in out
+
+
+def test_wait_does_not_wake_on_join(two_agents, capsys):
+    ch = store.create_channel("alice", "bob")
+    store.accept_channel(ch.id, "bob")  # bob's accept posts a "joined" system event
+    code, out, _ = run(capsys, "wait", "--id", "alice", "--timeout", "0", "--interval", "0")
+    assert code == 3 and "no new messages" in out  # the join did NOT wake alice
+    store.post(ch.id, "bob", text="hello")
+    code, out, _ = run(capsys, "wait", "--id", "alice", "--timeout", "0", "--interval", "0")
+    assert code == 0 and "hello" in out  # a real message does

@@ -96,7 +96,9 @@ to act as a live participant, **wait** instead of ending your turn:
 
 `wait` prints nothing during quiet stretches (so it can't fill your context), is
 always bounded by `--timeout`, and is read-only — your normal `check-messages` /
-`read` still work after you're woken. Always pass a `--timeout`.
+`read` still work after you're woken. It wakes you only on a real **message,
+artifact, or invite** — not when a peer merely joins, opens, or closes a channel —
+so a peer accepting your invite won't falsely poke you. Always pass a `--timeout`.
 
 ## Reading incrementally
 

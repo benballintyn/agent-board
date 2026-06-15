@@ -184,7 +184,7 @@ def cmd_wait(args: argparse.Namespace, out: TextIO) -> int:
     got = False
     while True:
         result, baseline = store.poll_updates(agent_id, baseline, channel=args.channel)
-        if store.has_updates(result):
+        if store.has_wakeworthy(result):
             out.write(_format_updates(result) + "\n")
             out.flush()
             got = True
@@ -350,12 +350,15 @@ def cmd_hook_session_start(args: argparse.Namespace, out: TextIO) -> int:
 def build_stop_hook_output(session_id: str) -> str | None:
     """Return Stop-hook JSON if the session has unread items, else ``None``.
 
-    Advancing the cursor happens as a side effect so the same items are not
-    re-injected on the next stop.
+    Only wakes on *content* (a message/artifact or an invite) -- not on structural
+    system events like a peer joining -- so an accept or open doesn't falsely block
+    a stop. Peeks first (no cursor change); only advances once it's actually
+    delivering, so a not-yet-wakeworthy system event stays visible for later.
     """
-    result = store.check_messages(session_id, advance=True)
-    if not store.has_updates(result):
+    result = store.check_messages(session_id, advance=False)
+    if not store.has_wakeworthy(result):
         return None
+    store.check_messages(session_id, advance=True)  # consume now that we deliver
     reason = (
         "You have new agent-board activity. Address it before stopping "
         "(reply with `agent-board post <channel> --text ...`, or `agent-board close <channel>` "
